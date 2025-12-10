@@ -39,6 +39,161 @@ except ImportError:
     JXL_AVAILABLE = False
 
 
+# -----------------------------------------------------------------------------
+# Visual Theme
+# -----------------------------------------------------------------------------
+
+DARK_THEME_STYLESHEET = """
+/* Global Reset */
+QWidget {
+    color: #E0E0E0;
+    background-color: #1E1E1E;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 10pt;
+}
+
+/* Main Window & Panels */
+QMainWindow {
+    background-color: #121212;
+}
+
+QGroupBox {
+    border: 1px solid #3A3A3A;
+    border-radius: 8px;
+    margin-top: 1.2em;
+    font-weight: bold;
+    background-color: #252526; /* Distinct section background */
+    padding-top: 25px; /* Added breathing room inside groups */
+    padding-bottom: 15px;
+    padding-left: 15px;
+    padding-right: 15px;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 0 5px;
+    background-color: transparent;
+    color: #64B5F6; /* Accent color for titles */
+    font-size: 15pt; /* Bigger section headers */
+}
+
+/* Buttons */
+QPushButton {
+    background-color: #3C3C3C;
+    border: 1px solid #505050;
+    border-radius: 6px;
+    padding: 6px 12px;
+    min-width: 80px;
+}
+QPushButton:hover {
+    background-color: #4A4A4A;
+    border-color: #606060;
+}
+QPushButton:pressed {
+    background-color: #323232;
+    border-color: #404040;
+}
+QPushButton:disabled {
+    background-color: #252525;
+    color: #606060;
+    border-color: #303030;
+}
+
+/* Primary Action Buttons */
+QPushButton[class="primary"] {
+    background-color: #0D47A1;
+    border: 1px solid #1565C0;
+    color: #FFFFFF;
+    font-weight: bold;
+}
+QPushButton[class="primary"]:hover {
+    background-color: #1565C0;
+    border-color: #1976D2;
+}
+QPushButton[class="primary"]:pressed {
+    background-color: #0D47A1;
+}
+
+/* Input Fields */
+QLineEdit, QComboBox {
+    background-color: #2D2D2D;
+    border: 1px solid #404040;
+    border-radius: 4px;
+    padding: 5px;
+    selection-background-color: #0D47A1;
+    color: #FFFFFF;
+}
+QLineEdit:focus, QComboBox:focus {
+    border: 1px solid #64B5F6;
+    background-color: #333333;
+}
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 20px;
+    border-left-width: 0px;
+    border-top-right-radius: 4px;
+    border-bottom-right-radius: 4px;
+}
+QComboBox QAbstractItemView {
+    background-color: #2D2D2D;
+    border: 1px solid #404040;
+    color: #E0E0E0;
+    outline: none;
+}
+
+/* Checkbox */
+QCheckBox {
+    spacing: 8px;
+}
+QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border-radius: 3px;
+    border: 1px solid #505050;
+    background-color: #2D2D2D;
+}
+QCheckBox::indicator:checked {
+    background-color: #1976D2;
+    border-color: #1976D2;
+    image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik05IDE2LjE3TDQuODMgMTJsLTEuNDIgMS40MUw5IDE5IDIxIDdsLTEuNDEtMS40MXoiLz48L3N2Zz4=);
+}
+
+/* Progress Bar */
+QProgressBar {
+    border: 1px solid #404040;
+    border-radius: 6px;
+    text-align: center;
+    background-color: #202020;
+    height: 20px;
+}
+QProgressBar::chunk {
+    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1565C0, stop:1 #2196F3);
+    border-radius: 5px;
+}
+
+/* Scrollbars */
+QScrollBar:vertical {
+    border: none;
+    background: #1E1E1E;
+    width: 12px;
+    margin: 0px;
+}
+QScrollBar::handle:vertical {
+    background: #424242;
+    min-height: 20px;
+    border-radius: 6px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #606060;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+"""
+
+
 @dataclass
 class OutputFormat:
     """Configuration for an output format."""
@@ -932,34 +1087,71 @@ class MainWindow(QMainWindow):
     def init_ui(self):
         """Initialize the user interface."""
         self.setWindowTitle("Mass Photo Converter")
-        self.setMinimumSize(900, 700)
-        self.resize(1280, 800)  # Start at HD-ish size
+        self.setMinimumSize(1100, 700)
         
-        # Central widget and main layout
+        # Scale to 75% of screen size
+        screen_geometry = QApplication.primaryScreen().availableGeometry()
+        width = int(screen_geometry.width() * 0.75)
+        height = int(screen_geometry.height() * 0.75)
+        self.resize(width, height)
+        
+        # Center the window
+        x = (screen_geometry.width() - width) // 2
+        y = (screen_geometry.height() - height) // 2
+        self.move(screen_geometry.x() + x, screen_geometry.y() + y)
+        
+        # Central widget
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setSpacing(10)
-        main_layout.setContentsMargins(15, 15, 15, 15)
         
-        # Title
-        title_label = QLabel("Mass Photo Converter")
-        title_font = QFont()
-        title_font.setPointSize(15)
-        title_font.setBold(True)
-        title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        main_layout.addWidget(title_label)
+        # Main layout is Horizontal (Left Panel = Controls, Right Panel = Preview)
+        main_layout = QHBoxLayout(central_widget)
+        main_layout.setSpacing(25)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setAlignment(Qt.AlignmentFlag.AlignTop)  # Align panels to top
         
-        # Folder selection group
+        # ---------------------------------------------------------------------
+        # Left Panel (Controls) - 1/3 Width
+        # ---------------------------------------------------------------------
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(20)
+        
+        # Header row: Title on left, Guide on right
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(25, 0, 0, 0)  # Left padding
+        
+        # Title (3 lines)
+        title_label = QLabel("Mass<br>Photo<br>Converter")
+        title_label.setStyleSheet("font-size: 28px; font-weight: bold; color: #FFFFFF; line-height: 1.1;")
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+        header_layout.addWidget(title_label)
+        
+        # Quick guide (to the right of title)
+        guide_text = (
+            "1. Select a <b>source folder</b> with images<br>"
+            "2. Choose an <b>output folder</b> for converted files<br>"
+            "3. Adjust <b>quality</b> and preview results<br>"
+            "4. Click <b>Start conversion</b> when ready"
+        )
+        guide_label = QLabel(guide_text)
+        guide_label.setStyleSheet("color: #AAAAAA; font-size: 13px; padding: 10px 20px;")
+        guide_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        guide_label.setWordWrap(True)
+        header_layout.addWidget(guide_label, 1)
+        
+        left_layout.addLayout(header_layout)
+        
+        # 1. Folder Selection
         folder_group = QGroupBox("Folders")
         folder_layout = QVBoxLayout(folder_group)
         
-        # Source folder
+        # Source
         source_layout = QHBoxLayout()
         source_layout.addWidget(QLabel("Source:"))
         self.source_edit = QLineEdit()
-        self.source_edit.setPlaceholderText("Select folder containing images (PNG, TIFF, JPEG)...")
+        self.source_edit.setPlaceholderText("Select folder...")
         self.source_edit.textChanged.connect(self.on_source_changed)
         source_layout.addWidget(self.source_edit)
         self.source_btn = QPushButton("Browse...")
@@ -967,51 +1159,43 @@ class MainWindow(QMainWindow):
         source_layout.addWidget(self.source_btn)
         folder_layout.addLayout(source_layout)
         
-        # Destination folder
+        # Dest
         dest_layout = QHBoxLayout()
         dest_layout.addWidget(QLabel("Output:"))
         self.dest_edit = QLineEdit()
-        self.dest_edit.setPlaceholderText("Select output folder for converted files...")
+        self.dest_edit.setPlaceholderText("Select output folder...")
         dest_layout.addWidget(self.dest_edit)
         self.dest_btn = QPushButton("Browse...")
         self.dest_btn.clicked.connect(self.browse_dest)
         dest_layout.addWidget(self.dest_btn)
         folder_layout.addLayout(dest_layout)
         
-        # Include subfolders checkbox
-        self.subfolder_check = QCheckBox("Include subfolders (recreate folder structure)")
+        # Subfolders
+        self.subfolder_check = QCheckBox("Include subfolders")
         self.subfolder_check.setChecked(True)
         self.subfolder_check.stateChanged.connect(self.on_source_changed)
         folder_layout.addWidget(self.subfolder_check)
         
-        main_layout.addWidget(folder_group)
+        left_layout.addWidget(folder_group)
         
-        # Preview group
-        preview_group = QGroupBox("Preview comparison")
-        preview_layout = QVBoxLayout(preview_group)
+        # 2. Preview Settings (Extracted from old Preview Group)
+        preview_settings_group = QGroupBox("Preview settings")
+        preview_settings_layout = QVBoxLayout(preview_settings_group)
         
-        # Controls row: Left side (file + compare), Right side (quality slider)
-        controls_layout = QHBoxLayout()
-        
-        # Left column: File selector and Compare dropdowns
-        left_controls = QVBoxLayout()
-        
-        # File selector row
+        # File & Load
         file_row = QHBoxLayout()
         file_row.addWidget(QLabel("File:"))
         self.preview_combo = QComboBox()
-        self.preview_combo.setMaximumWidth(180)
-        file_row.addWidget(self.preview_combo)
+        self.preview_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        file_row.addWidget(self.preview_combo, 1)
         self.load_preview_btn = QPushButton("Load")
-        self.load_preview_btn.setMaximumWidth(50)
         self.load_preview_btn.clicked.connect(self.on_load_preview_clicked)
         file_row.addWidget(self.load_preview_btn)
-        file_row.addStretch()
-        left_controls.addLayout(file_row)
+        preview_settings_layout.addLayout(file_row)
         
-        # Compare selectors row
+        # Comparison logic
         compare_row = QHBoxLayout()
-        compare_row.addWidget(QLabel("Compare:"))
+        compare_row.addWidget(QLabel("Left:"))
         self.left_format_combo = QComboBox()
         self.left_format_combo.addItem("Original")
         for name in OUTPUT_FORMATS.keys():
@@ -1020,7 +1204,8 @@ class MainWindow(QMainWindow):
         self.left_format_combo.currentTextChanged.connect(self.on_comparison_format_changed)
         self.left_format_combo.currentTextChanged.connect(self.check_analysis_cache)
         compare_row.addWidget(self.left_format_combo)
-        compare_row.addWidget(QLabel("vs"))
+        
+        compare_row.addWidget(QLabel("Right:"))
         self.right_format_combo = QComboBox()
         self.right_format_combo.addItem("Original")
         for name in OUTPUT_FORMATS.keys():
@@ -1029,44 +1214,23 @@ class MainWindow(QMainWindow):
         self.right_format_combo.currentTextChanged.connect(self.on_comparison_format_changed)
         self.right_format_combo.currentTextChanged.connect(self.check_analysis_cache)
         compare_row.addWidget(self.right_format_combo)
-        compare_row.addStretch()
-        left_controls.addLayout(compare_row)
+        preview_settings_layout.addLayout(compare_row)
         
-        controls_layout.addLayout(left_controls)
-        # Middle section: Analysis controls
-        analysis_section = QVBoxLayout()
+        # Quality Slider (Full width in this column)
+        quality_layout = QVBoxLayout()
+        quality_header = QHBoxLayout()
+        quality_header.addWidget(QLabel("Quality setting:"))
+        self.quality_label = QLabel("80%")
+        self.quality_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        quality_header.addWidget(self.quality_label)
+        quality_layout.addLayout(quality_header)
         
-        # Top row: Label + dropdown
-        top_row = QHBoxLayout()
-        top_row.addWidget(QLabel("Analyse file size vs quality steps:"))
-        self.analysis_detail_combo = QComboBox()
-        self.analysis_detail_combo.addItems(["Low (8)", "Medium (15)", "High (30)"])
-        self.analysis_detail_combo.setCurrentIndex(1)  # Default to Medium
-        self.analysis_detail_combo.setMinimumWidth(95)
-        self.analysis_detail_combo.currentIndexChanged.connect(self.check_analysis_cache)
-        top_row.addWidget(self.analysis_detail_combo)
-        analysis_section.addLayout(top_row)
-        
-        # Bottom row: Button
-        self.analyze_btn = QPushButton("📊 Start Analysis")
-        self.analyze_btn.setEnabled(False)  # Enable when preview loaded
-        self.analyze_btn.clicked.connect(self.on_analyze_clicked)
-        analysis_section.addWidget(self.analyze_btn)
-        
-        controls_layout.addLayout(analysis_section)
-        controls_layout.addSpacing(20)
-        
-        # Right column: Thick fill-bar quality slider
-        quality_layout = QHBoxLayout()
-        quality_layout.addWidget(QLabel("Quality:"))
         self.quality_slider = QSlider(Qt.Orientation.Horizontal)
-        self.quality_slider.setMinimum(5)  # Min 5%
+        self.quality_slider.setMinimum(5)
         self.quality_slider.setMaximum(100)
-        self.quality_slider.setSingleStep(5)  # 5% increments
+        self.quality_slider.setSingleStep(5)
         self.quality_slider.setPageStep(5)
         self.quality_slider.setValue(80)
-        self.quality_slider.setMinimumWidth(180)
-        self.quality_slider.setMinimumHeight(40)  # Thick slider
         self.quality_slider.setStyleSheet("""
             QSlider::groove:horizontal {
                 height: 30px;
@@ -1090,84 +1254,100 @@ class MainWindow(QMainWindow):
                 background: #E0E0E0;
             }
         """)
-        # Only update label while dragging, render on release
         self.quality_slider.valueChanged.connect(self.on_quality_value_changed)
         self.quality_slider.sliderReleased.connect(self.on_quality_slider_released)
         quality_layout.addWidget(self.quality_slider)
-        self.quality_label = QLabel("80%")
-        self.quality_label.setMinimumWidth(40)
-        quality_layout.addWidget(self.quality_label)
+        preview_settings_layout.addLayout(quality_layout)
         
-        controls_layout.addLayout(quality_layout)
-        preview_layout.addLayout(controls_layout)
+        # Analysis Row
+        analysis_row = QHBoxLayout()
+        self.analysis_detail_combo = QComboBox()
+        self.analysis_detail_combo.addItems(["Low (8)", "Medium (15)", "High (30)"])
+        self.analysis_detail_combo.setCurrentIndex(1)
+        self.analysis_detail_combo.currentIndexChanged.connect(self.check_analysis_cache)
+        analysis_row.addWidget(QLabel("Analysis detail:"))
+        analysis_row.addWidget(self.analysis_detail_combo)
         
-        # Comparison widget
-        self.comparison_widget = ComparisonWidget()
-        preview_layout.addWidget(self.comparison_widget, 1)
+        self.analyze_btn = QPushButton("📊 Analyze")
+        self.analyze_btn.setProperty("class", "primary")
+        self.analyze_btn.setEnabled(False)
+        self.analyze_btn.clicked.connect(self.on_analyze_clicked)
+        analysis_row.addWidget(self.analyze_btn)
+        preview_settings_layout.addLayout(analysis_row)
         
-        # Size info label (will show both formats)
-        self.size_info_label = QLabel("")
-        self.size_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        preview_layout.addWidget(self.size_info_label)
+        left_layout.addWidget(preview_settings_group)
         
-        main_layout.addWidget(preview_group, 1)
+        # 3. Output Settings
+        output_group = QGroupBox("Target format")
+        output_layout = QVBoxLayout(output_group)
         
-        # Output settings group (for actual conversion)
-        output_group = QGroupBox("Conversion output")
-        output_layout = QHBoxLayout(output_group)
-        
-        # Format selector
-        output_layout.addWidget(QLabel("Convert to:"))
+        fmt_row = QHBoxLayout()
+        fmt_row.addWidget(QLabel("Convert to:"))
         self.format_combo = QComboBox()
         for name in OUTPUT_FORMATS.keys():
             self.format_combo.addItem(name)
-        self.format_combo.setCurrentText('AVIF')  # Default
+        self.format_combo.setCurrentText('AVIF')
         self.format_combo.currentTextChanged.connect(self.on_format_changed)
-        output_layout.addWidget(self.format_combo)
+        fmt_row.addWidget(self.format_combo)
+        output_layout.addLayout(fmt_row)
         
-        output_layout.addSpacing(20)
-        
-        # Estimate label
-        self.estimate_label = QLabel("Select a source folder to see estimate")
+        self.estimate_label = QLabel("Est. Size: --")
         output_layout.addWidget(self.estimate_label)
         
-        output_layout.addStretch()
-        
-        main_layout.addWidget(output_group)
-        
-        # Progress section
-        progress_group = QGroupBox("Progress")
-        progress_layout = QVBoxLayout(progress_group)
+        left_layout.addWidget(output_group)
+
+        # 4. Progress & Action
+        action_group = QGroupBox("Execution")
+        action_layout = QVBoxLayout(action_group)
         
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
-        progress_layout.addWidget(self.progress_bar)
+        action_layout.addWidget(self.progress_bar)
         
         self.progress_label = QLabel("Ready")
         self.progress_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        progress_layout.addWidget(self.progress_label)
+        action_layout.addWidget(self.progress_label)
         
-        main_layout.addWidget(progress_group)
-        
-        # Buttons
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
-        
-        self.start_btn = QPushButton("Start Conversion")
-        self.start_btn.setMinimumWidth(150)
-        self.start_btn.setMinimumHeight(35)
+        btn_layout = QHBoxLayout()
+        self.start_btn = QPushButton("Start conversion")
+        self.start_btn.setProperty("class", "primary")
+        self.start_btn.setMinimumHeight(45)
         self.start_btn.clicked.connect(self.start_conversion)
-        button_layout.addWidget(self.start_btn)
+        btn_layout.addWidget(self.start_btn)
         
         self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.setMinimumWidth(100)
-        self.cancel_btn.setMinimumHeight(35)
+        self.cancel_btn.setMinimumHeight(45)
         self.cancel_btn.clicked.connect(self.cancel_conversion)
         self.cancel_btn.setEnabled(False)
-        button_layout.addWidget(self.cancel_btn)
+        btn_layout.addWidget(self.cancel_btn)
         
-        button_layout.addStretch()
-        main_layout.addLayout(button_layout)
+        action_layout.addLayout(btn_layout)
+        
+        left_layout.addWidget(action_group)
+        
+        
+        # ---------------------------------------------------------------------
+        # Right Panel (Preview) - 2/3 Width
+        # ---------------------------------------------------------------------
+        right_panel = QFrame()
+        right_panel.setStyleSheet("background-color: #000000; border-radius: 8px;")
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Comparison Widget
+        self.comparison_widget = ComparisonWidget()
+        right_layout.addWidget(self.comparison_widget, 1)
+        
+        # Info Label (Overlay or below?) -> Below for now
+        self.size_info_label = QLabel("Load a preview to compare results")
+        self.size_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.size_info_label.setStyleSheet("color: #888888; padding: 5px;")
+        right_layout.addWidget(self.size_info_label)
+
+        # Add panels to Main Layout
+        main_layout.addWidget(left_panel, 1)  # 1/3
+        main_layout.addWidget(right_panel, 2) # 2/3
+
     
     def browse_source(self):
         """Open dialog to select source folder."""
@@ -1442,7 +1622,7 @@ class MainWindow(QMainWindow):
     def check_analysis_cache(self, *args):
         """Check if current analysis settings match cache and update button text."""
         if not self.cached_analysis_results or not self.cached_analysis_params:
-            self.analyze_btn.setText("📊 Start Analysis")
+            self.analyze_btn.setText("📊 Start analysis")
             return
             
         # Reconstruct current params to check against cache
@@ -1463,9 +1643,9 @@ class MainWindow(QMainWindow):
         )
         
         if self.cached_analysis_params == current_params:
-            self.analyze_btn.setText("📊 View Analysis")
+            self.analyze_btn.setText("📊 View analysis")
         else:
-            self.analyze_btn.setText("📊 Start Analysis")
+            self.analyze_btn.setText("📊 Start analysis")
     
     def on_format_changed(self, format_name: str):
         """Handle output format change."""
@@ -1831,6 +2011,7 @@ def main():
     
     # Set application style and increase global font size
     app.setStyle('Fusion')
+    app.setStyleSheet(DARK_THEME_STYLESHEET) # Apply dark theme
     font = app.font()
     font.setPointSize(font.pointSize() + 1)
     app.setFont(font)
