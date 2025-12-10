@@ -14,7 +14,8 @@ import threading
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QLineEdit, QCheckBox, QSlider, QProgressBar,
-    QFileDialog, QMessageBox, QFrame, QGroupBox, QComboBox, QSizePolicy
+    QFileDialog, QMessageBox, QFrame, QGroupBox, QComboBox, QSizePolicy,
+    QProgressDialog, QDialog
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect, QTimer
 from PyQt6.QtGui import QFont, QPixmap, QImage, QPainter, QCursor, QPen, QColor
@@ -268,6 +269,305 @@ class SizeEstimator:
                 return f"{size_bytes:.1f} {unit}"
             size_bytes /= 1024
         return f"{size_bytes:.1f} TB"
+
+
+class AnalysisWorker(QThread):
+    """Worker thread for analyzing quality vs file size."""
+    
+    progress = pyqtSignal(int, int, str)  # current, total, message
+    finished = pyqtSignal(dict)  # {format_name: [(quality, size), ...]}
+    error = pyqtSignal(str)
+    
+    def __init__(self, pil_image, formats_to_analyze: list, original_size: int, quality_levels: list):
+        super().__init__()
+        self.pil_image = pil_image
+        self.formats_to_analyze = formats_to_analyze  # List of format names
+        self.original_size = original_size
+        self.quality_levels = quality_levels
+        self._cancelled = False
+    
+    def cancel(self):
+        self._cancelled = True
+    
+    def _convert_single(self, format_name: str, quality: int) -> tuple:
+        """Convert at a single quality level, return (format, quality, size)."""
+        fmt = OUTPUT_FORMATS.get(format_name)
+        if not fmt:
+            return (format_name, quality, 0)
+        
+        # Copy image for thread safety - PIL images are not thread-safe
+        img_copy = self.pil_image.copy()
+        
+        buffer = BytesIO()
+        save_params = {
+            'format': fmt.pillow_format,
+            'quality': quality,
+            **fmt.extra_params
+        }
+        img_copy.save(buffer, **save_params)
+        return (format_name, quality, buffer.tell())
+    
+    def run(self):
+        try:
+            # Build list of all tasks
+            tasks = []
+            for format_name in self.formats_to_analyze:
+                fmt = OUTPUT_FORMATS.get(format_name)
+                if fmt:
+                    for quality in self.quality_levels:
+                        tasks.append((format_name, quality))
+            
+            total_steps = len(tasks)
+            results = {fmt: [] for fmt in self.formats_to_analyze}
+            completed = 0
+            
+            # Use ThreadPoolExecutor for parallel processing
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = {
+                    executor.submit(self._convert_single, fmt, q): (fmt, q)
+                    for fmt, q in tasks
+                }
+                
+                for future in as_completed(futures):
+                    if self._cancelled:
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        return
+                    
+                    format_name, quality, size = future.result()
+                    results[format_name].append((quality, size))
+                    
+                    completed += 1
+                    self.progress.emit(completed, total_steps, f"Analyzing ({completed}/{total_steps})...")
+            
+            # Sort results by quality within each format
+            sorted_results = {}
+            for format_name in results:
+                sorted_results[format_name] = sorted(results[format_name], key=lambda x: x[0])
+            
+            self.finished.emit(sorted_results)
+            
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class QualityChartDialog(QDialog):
+    """Dialog showing quality vs file size chart."""
+    
+    FORMAT_COLORS = {
+        'WebP': QColor(76, 175, 80),      # Green
+        'AVIF': QColor(33, 150, 243),     # Blue
+        'HEIC': QColor(255, 152, 0),      # Orange
+        'JPEG XL': QColor(156, 39, 176),  # Purple
+    }
+    
+    def __init__(self, results: dict, original_size: int, parent=None):
+        super().__init__(parent)
+        self.results = results  # {format_name: [(quality, size), ...]}
+        self.original_size = original_size
+        self.setWindowTitle("Quality vs File Size Analysis")
+        self.setMinimumSize(600, 400)
+        self.resize(900, 600)
+        self.setSizeGripEnabled(True)  # Show resize grip
+        
+        # Store data point positions for hover detection
+        self.data_point_positions = []  # [(x, y, format_name, quality, size), ...]
+        self.hovered_point = None
+        
+        layout = QVBoxLayout(self)
+        
+        # Chart area - use custom widget for mouse tracking
+        self.chart_widget = QWidget()
+        self.chart_widget.setMinimumHeight(350)
+        self.chart_widget.paintEvent = self.paint_chart
+        self.chart_widget.mouseMoveEvent = self.on_chart_mouse_move
+        self.chart_widget.setMouseTracking(True)
+        layout.addWidget(self.chart_widget, 1)
+        
+        # Tooltip label (below chart)
+        self.tooltip_label = QLabel("")
+        self.tooltip_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tooltip_label.setStyleSheet("color: #AAAAAA; font-size: 11px;")
+        layout.addWidget(self.tooltip_label)
+        
+        # Legend
+        legend_layout = QHBoxLayout()
+        legend_layout.addStretch()
+        for format_name in results.keys():
+            color = self.FORMAT_COLORS.get(format_name, QColor(128, 128, 128))
+            color_box = QLabel()
+            color_box.setFixedSize(16, 16)
+            color_box.setStyleSheet(f"background-color: {color.name()}; border-radius: 3px;")
+            legend_layout.addWidget(color_box)
+            legend_layout.addWidget(QLabel(format_name))
+            legend_layout.addSpacing(20)
+        legend_layout.addStretch()
+        layout.addLayout(legend_layout)
+        
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        btn_layout.addWidget(close_btn)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+    
+    def paint_chart(self, event):
+        """Custom paint for the chart."""
+        # Clear old point positions
+        self.data_point_positions.clear()
+        
+        painter = QPainter(self.chart_widget)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        rect = self.chart_widget.rect()
+        margin_left = 80   # More room for Y-axis label
+        margin_right = 30
+        margin_top = 20
+        margin_bottom = 60  # More room for X-axis label
+        
+        chart_left = margin_left
+        chart_right = rect.width() - margin_right
+        chart_top = margin_top
+        chart_bottom = rect.height() - margin_bottom
+        chart_width = chart_right - chart_left
+        chart_height = chart_bottom - chart_top
+        
+        # Background
+        painter.fillRect(rect, QColor(45, 45, 45))
+        
+        # Chart area background
+        painter.fillRect(chart_left, chart_top, chart_width, chart_height, QColor(35, 35, 35))
+        
+        # Calculate max percentage from actual data (+ 10% buffer)
+        max_pct = 0
+        for data_points in self.results.values():
+            for quality, size in data_points:
+                size_pct = (size / self.original_size) * 100
+                if size_pct > max_pct:
+                    max_pct = size_pct
+        max_pct = max(5, max_pct * 1.15)  # Add 15% buffer, minimum 5%
+        
+        # Calculate nice grid steps based on actual max
+        step_size = max_pct / 5
+        # Round step to nice number
+        if step_size < 2:
+            step_size = 1
+        elif step_size < 5:
+            step_size = 2
+        elif step_size < 10:
+            step_size = 5
+        else:
+            step_size = int((step_size + 4) // 5) * 5
+        
+        grid_steps = [int(step_size * i) for i in range(1, 6) if step_size * i <= max_pct + 1]
+        
+        # Draw grid lines and labels
+        painter.setPen(QPen(QColor(70, 70, 70), 1))
+        
+        # Horizontal grid (file size percentages) - from 0 to max
+        for pct in grid_steps:
+            y = chart_bottom - (pct / max_pct) * chart_height
+            painter.drawLine(int(chart_left), int(y), int(chart_right), int(y))
+            painter.setPen(QColor(180, 180, 180))
+            painter.drawText(margin_left - 45, int(y + 5), f"{pct}%")
+            painter.setPen(QPen(QColor(70, 70, 70), 1))
+        
+        # Draw 0% baseline
+        painter.setPen(QColor(180, 180, 180))
+        painter.drawText(margin_left - 35, int(chart_bottom + 5), "0%")
+        painter.setPen(QPen(QColor(70, 70, 70), 1))
+        
+        # Vertical grid (quality levels)
+        for q in [20, 40, 60, 80, 100]:
+            x = chart_left + (q / 100) * chart_width
+            painter.drawLine(int(x), int(chart_top), int(x), int(chart_bottom))
+            painter.setPen(QColor(180, 180, 180))
+            painter.drawText(int(x - 12), int(chart_bottom + 18), f"{q}%")
+            painter.setPen(QPen(QColor(70, 70, 70), 1))
+        
+        # Axis labels
+        painter.setPen(QColor(200, 200, 200))
+        font = painter.font()
+        font.setPointSize(10)
+        painter.setFont(font)
+        painter.drawText(int(chart_left + chart_width / 2 - 30), int(chart_bottom + 45), "Quality")
+        
+        # Rotated Y-axis label - more space from edge
+        painter.save()
+        painter.translate(18, int(chart_top + chart_height / 2 + 50))
+        painter.rotate(-90)
+        painter.drawText(0, 0, "Size (% of original)")
+        painter.restore()
+        
+        # Draw data lines
+        for format_name, data_points in self.results.items():
+            if not data_points:
+                continue
+            
+            color = self.FORMAT_COLORS.get(format_name, QColor(128, 128, 128))
+            pen = QPen(color, 3)
+            painter.setPen(pen)
+            
+            points = []
+            for quality, size in data_points:
+                x = chart_left + (quality / 100) * chart_width
+                size_pct = (size / self.original_size) * 100
+                y = chart_bottom - (size_pct / max_pct) * chart_height
+                points.append((int(x), int(y), quality, size, size_pct))
+            
+            # Draw lines between points
+            for i in range(len(points) - 1):
+                painter.drawLine(points[i][0], points[i][1], points[i+1][0], points[i+1][1])
+            
+            # Draw points and store positions for hover
+            painter.setBrush(color)
+            for x, y, quality, size, size_pct in points:
+                # Highlight hovered point
+                if self.hovered_point and self.hovered_point[:2] == (format_name, quality):
+                    painter.setBrush(QColor(255, 255, 255))
+                    painter.drawEllipse(x - 6, y - 6, 12, 12)
+                    painter.setBrush(color)
+                else:
+                    painter.drawEllipse(x - 4, y - 4, 8, 8)
+                self.data_point_positions.append((x, y, format_name, quality, size, size_pct))
+        
+        # Draw axes
+        painter.setPen(QPen(QColor(200, 200, 200), 2))
+        painter.drawLine(int(chart_left), int(chart_bottom), int(chart_right), int(chart_bottom))
+        painter.drawLine(int(chart_left), int(chart_top), int(chart_left), int(chart_bottom))
+    
+    def on_chart_mouse_move(self, event):
+        """Handle mouse move over chart to show tooltips."""
+        mouse_x = event.position().x()
+        mouse_y = event.position().y()
+        
+        # Find nearest point within threshold
+        threshold = 15
+        nearest = None
+        min_dist = threshold
+        
+        for x, y, format_name, quality, size, size_pct in self.data_point_positions:
+            dist = ((mouse_x - x) ** 2 + (mouse_y - y) ** 2) ** 0.5
+            if dist < min_dist:
+                min_dist = dist
+                nearest = (format_name, quality, size, size_pct)
+        
+        if nearest:
+            format_name, quality, size, size_pct = nearest
+            size_str = SizeEstimator.format_size(size)
+            self.tooltip_label.setText(
+                f"{format_name} at {quality}% quality: {size_str} ({size_pct:.1f}% of original)"
+            )
+            if self.hovered_point != (format_name, quality):
+                self.hovered_point = (format_name, quality)
+                self.chart_widget.update()
+        else:
+            if self.tooltip_label.text():
+                self.tooltip_label.setText("")
+            if self.hovered_point:
+                self.hovered_point = None
+                self.chart_widget.update()
 
 
 class ComparisonWidget(QWidget):
@@ -620,6 +920,11 @@ class MainWindow(QMainWindow):
         self.preview_update_timer = QTimer()
         self.preview_update_timer.setSingleShot(True)
         self.preview_update_timer.timeout.connect(self.update_preview_now)
+        
+        # Analysis cache
+        self.cached_analysis_results = None  # {format_name: [(quality, size), ...]}
+        self.cached_analysis_params = None  # (file_path, formats, detail_index, original_size)
+        
         self.init_ui()
     
     def init_ui(self):
@@ -711,6 +1016,7 @@ class MainWindow(QMainWindow):
             self.left_format_combo.addItem(name)
         self.left_format_combo.setCurrentText("Original")
         self.left_format_combo.currentTextChanged.connect(self.on_comparison_format_changed)
+        self.left_format_combo.currentTextChanged.connect(self.check_analysis_cache)
         compare_row.addWidget(self.left_format_combo)
         compare_row.addWidget(QLabel("vs"))
         self.right_format_combo = QComboBox()
@@ -719,12 +1025,34 @@ class MainWindow(QMainWindow):
             self.right_format_combo.addItem(name)
         self.right_format_combo.setCurrentText("AVIF")
         self.right_format_combo.currentTextChanged.connect(self.on_comparison_format_changed)
+        self.right_format_combo.currentTextChanged.connect(self.check_analysis_cache)
         compare_row.addWidget(self.right_format_combo)
         compare_row.addStretch()
         left_controls.addLayout(compare_row)
         
         controls_layout.addLayout(left_controls)
-        controls_layout.addSpacing(30)
+        # Middle section: Analysis controls
+        analysis_section = QVBoxLayout()
+        
+        # Top row: Label + dropdown
+        top_row = QHBoxLayout()
+        top_row.addWidget(QLabel("Analyse file size vs quality steps:"))
+        self.analysis_detail_combo = QComboBox()
+        self.analysis_detail_combo.addItems(["Low (8)", "Medium (15)", "High (30)"])
+        self.analysis_detail_combo.setCurrentIndex(1)  # Default to Medium
+        self.analysis_detail_combo.setMinimumWidth(95)
+        self.analysis_detail_combo.currentIndexChanged.connect(self.check_analysis_cache)
+        top_row.addWidget(self.analysis_detail_combo)
+        analysis_section.addLayout(top_row)
+        
+        # Bottom row: Button
+        self.analyze_btn = QPushButton("📊 Start Analysis")
+        self.analyze_btn.setEnabled(False)  # Enable when preview loaded
+        self.analyze_btn.clicked.connect(self.on_analyze_clicked)
+        analysis_section.addWidget(self.analyze_btn)
+        
+        controls_layout.addLayout(analysis_section)
+        controls_layout.addSpacing(20)
         
         # Right column: Thick fill-bar quality slider
         quality_layout = QHBoxLayout()
@@ -841,8 +1169,8 @@ class MainWindow(QMainWindow):
     
     def browse_source(self):
         """Open dialog to select source folder."""
-        # Start from current value, or last used folder, or home
-        start_dir = self.source_edit.text() or self.dest_edit.text() or str(Path.home())
+        # Use current value if set, otherwise let Windows use last location
+        start_dir = self.source_edit.text() or ""
         folder = QFileDialog.getExistingDirectory(
             self, "Select Source Folder", start_dir
         )
@@ -851,8 +1179,8 @@ class MainWindow(QMainWindow):
     
     def browse_dest(self):
         """Open dialog to select destination folder."""
-        # Start from current value, or source folder, or home
-        start_dir = self.dest_edit.text() or self.source_edit.text() or str(Path.home())
+        # Use current value if set, otherwise let Windows use last location
+        start_dir = self.dest_edit.text() or ""
         folder = QFileDialog.getExistingDirectory(
             self, "Select Output Folder", start_dir
         )
@@ -949,6 +1277,10 @@ class MainWindow(QMainWindow):
                 # Reset zoom when loading new image
                 self.comparison_widget.reset_zoom()
                 
+                # Enable analyze button
+                self.analyze_btn.setEnabled(True)
+                self.check_analysis_cache()
+                
                 # Generate converted preview
                 self.update_preview_now()
                 
@@ -983,6 +1315,155 @@ class MainWindow(QMainWindow):
         if snapped != value:
             self.quality_slider.setValue(snapped)
         self.preview_update_timer.start(50)  # Short delay then render
+    
+    def on_analyze_clicked(self):
+        """Handle Analyze button click - start quality analysis or view cached."""
+        if not self.current_pil_image:
+            return
+        
+        # Determine which formats to analyze (non-Original selections)
+        formats = []
+        left = self.left_format_combo.currentText()
+        right = self.right_format_combo.currentText()
+        
+        if left != "Original" and left not in formats:
+            formats.append(left)
+        if right != "Original" and right not in formats:
+            formats.append(right)
+        
+        if not formats:
+            QMessageBox.information(
+                self, "No Format Selected",
+                "Please select at least one output format (not Original) to analyze."
+            )
+            return
+        
+        # Get quality levels from dropdown
+        # All levels are denser at higher quality where compression differences matter most
+        detail_index = self.analysis_detail_combo.currentIndex()
+        if detail_index == 0:  # Low (8)
+            quality_levels = [5, 20, 40, 60, 80, 90, 95, 98]
+        elif detail_index == 1:  # Medium (15)
+            quality_levels = [5, 15, 25, 35, 45, 55, 65, 75, 82, 87, 90, 93, 95, 97, 98]
+        else:  # High (30)
+            quality_levels = [5, 8, 11, 14, 17, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56,
+                              60, 64, 68, 72, 76, 80, 84, 87, 90, 92, 94, 95, 96, 97, 98]
+        
+        # Check cache
+        current_params = (
+            self.preview_combo.currentData(),  # File path
+            tuple(sorted(formats)),            # Formats
+            detail_index,                      # Detail level
+            self.current_original_size         # Original size (implicit file check)
+        )
+        
+        if (self.cached_analysis_results and 
+            self.cached_analysis_params == current_params):
+            # Cache hit - show chart immediately
+            dialog = QualityChartDialog(self.cached_analysis_results, self.current_original_size, self)
+            dialog.exec()
+            return
+
+        num_renders = len(formats) * len(quality_levels)
+        
+        # Confirmation dialog
+        result = QMessageBox.question(
+            self, "Quality Analysis",
+            f"This will render the image {num_renders} times to analyze quality vs size.\n"
+            f"Formats: {', '.join(formats)}\n\n"
+            "This may take a while. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if result != QMessageBox.StandardButton.Yes:
+            return
+        
+        # Store params for caching on completion
+        self._pending_analysis_params = current_params
+        
+        # Create progress dialog
+        self.analysis_progress = QProgressDialog(
+            "Analyzing quality levels...", "Cancel", 0, num_renders, self
+        )
+        self.analysis_progress.setWindowTitle("Analyzing")
+        self.analysis_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self.analysis_progress.setMinimumDuration(0)
+        self.analysis_progress.setValue(0)
+        
+        # Create and start worker
+        self.analysis_worker = AnalysisWorker(
+            self.current_pil_image,
+            formats,
+            self.current_original_size,
+            quality_levels
+        )
+        self.analysis_worker.progress.connect(self.on_analysis_progress)
+        self.analysis_worker.finished.connect(self.on_analysis_finished)
+        self.analysis_worker.error.connect(self.on_analysis_error)
+        self.analysis_progress.canceled.connect(self.on_analysis_cancelled)
+        
+        self.analysis_worker.start()
+    
+    def on_analysis_progress(self, current: int, total: int, message: str):
+        """Update analysis progress dialog."""
+        if hasattr(self, 'analysis_progress') and self.analysis_progress:
+            self.analysis_progress.setLabelText(message)
+            self.analysis_progress.setValue(current)
+    
+    def on_analysis_finished(self, results: dict):
+        """Handle analysis completion - show chart and cache results."""
+        if hasattr(self, 'analysis_progress') and self.analysis_progress:
+            self.analysis_progress.close()
+        
+        # Cache results
+        if hasattr(self, '_pending_analysis_params'):
+            self.cached_analysis_results = results
+            self.cached_analysis_params = self._pending_analysis_params
+            del self._pending_analysis_params
+            self.check_analysis_cache()  # Update button text
+        
+        # Show chart dialog
+        dialog = QualityChartDialog(results, self.current_original_size, self)
+        dialog.exec()
+    
+    def on_analysis_error(self, error_msg: str):
+        """Handle analysis error."""
+        if hasattr(self, 'analysis_progress') and self.analysis_progress:
+            self.analysis_progress.close()
+        QMessageBox.critical(self, "Analysis Error", f"Error during analysis: {error_msg}")
+    
+    def on_analysis_cancelled(self):
+        """Handle analysis cancellation."""
+        if hasattr(self, 'analysis_worker') and self.analysis_worker:
+            self.analysis_worker.cancel()
+            
+    def check_analysis_cache(self, *args):
+        """Check if current analysis settings match cache and update button text."""
+        if not self.cached_analysis_results or not self.cached_analysis_params:
+            self.analyze_btn.setText("📊 Start Analysis")
+            return
+            
+        # Reconstruct current params to check against cache
+        formats = []
+        left = self.left_format_combo.currentText()
+        right = self.right_format_combo.currentText()
+        
+        if left != "Original" and left not in formats:
+            formats.append(left)
+        if right != "Original" and right not in formats:
+            formats.append(right)
+            
+        current_params = (
+            self.preview_combo.currentData(),  # File path
+            tuple(sorted(formats)),            # Formats
+            self.analysis_detail_combo.currentIndex(),  # Detail level
+            self.current_original_size         # Original size
+        )
+        
+        if self.cached_analysis_params == current_params:
+            self.analyze_btn.setText("📊 View Analysis")
+        else:
+            self.analyze_btn.setText("📊 Start Analysis")
     
     def on_format_changed(self, format_name: str):
         """Handle output format change."""
