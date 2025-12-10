@@ -1,5 +1,5 @@
 """
-PNG to AVIF Batch Converter
+Mass Photo Converter
 A high-performance batch conversion tool for PNG to AVIF format.
 """
 
@@ -489,7 +489,7 @@ class QualityChartDialog(QDialog):
         # Axis labels
         painter.setPen(QColor(200, 200, 200))
         font = painter.font()
-        font.setPointSize(10)
+        font.setPointSize(11)
         painter.setFont(font)
         painter.drawText(int(chart_left + chart_width / 2 - 30), int(chart_bottom + 45), "Quality")
         
@@ -642,7 +642,7 @@ class ComparisonWidget(QWidget):
             painter.fillRect(rect, QColor(30, 30, 30))
             painter.setPen(QColor(200, 200, 200))
             font = QFont()
-            font.setPointSize(16)
+            font.setPointSize(17)
             font.setBold(True)
             painter.setFont(font)
             message = getattr(self, 'rendering_message', 'Rendering preview...')
@@ -762,7 +762,7 @@ class ComparisonWidget(QWidget):
         # Calculate right label width dynamically
         font = QFont()
         font.setBold(True)
-        font.setPointSize(14)
+        font.setPointSize(15)
         painter.setFont(font)
         metrics = painter.fontMetrics()
         right_label_width = metrics.horizontalAdvance(right_text) + 40  # padding
@@ -779,7 +779,7 @@ class ComparisonWidget(QWidget):
         """Draw a label with pill-shaped background."""
         font = QFont()
         font.setBold(True)
-        font.setPointSize(11 if smaller else 14)
+        font.setPointSize(12 if smaller else 15)
         painter.setFont(font)
         
         # Measure text
@@ -929,7 +929,7 @@ class MainWindow(QMainWindow):
     
     def init_ui(self):
         """Initialize the user interface."""
-        self.setWindowTitle("Image Converter")
+        self.setWindowTitle("Mass Photo Converter")
         self.setMinimumSize(900, 700)
         self.resize(1280, 800)  # Start at HD-ish size
         
@@ -941,9 +941,9 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(15, 15, 15, 15)
         
         # Title
-        title_label = QLabel("Image Batch Converter")
+        title_label = QLabel("Mass Photo Converter")
         title_font = QFont()
-        title_font.setPointSize(14)
+        title_font.setPointSize(15)
         title_font.setBold(True)
         title_label.setFont(title_font)
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1811,8 +1811,11 @@ def main():
     """Application entry point."""
     app = QApplication(sys.argv)
     
-    # Set application style
+    # Set application style and increase global font size
     app.setStyle('Fusion')
+    font = app.font()
+    font.setPointSize(font.pointSize() + 1)
+    app.setFont(font)
     
     window = MainWindow()
     window.show()

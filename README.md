@@ -1,6 +1,6 @@
-# PhotoConverter
+# Mass Photo Converter
 
-**PhotoConverter** is a high-performance, multi-threaded batch image conversion tool designed to optimize images for modern web standards. It specializes in converting high-quality PNG, TIFF, and JPEG images into next-generation formats like AVIF and WebP, offering significant size reductions with minimal visual loss.
+**Mass Photo Converter** is a high-performance, multi-threaded batch image conversion tool designed to optimize images for modern web standards. It specializes in converting high-quality PNG, TIFF, and JPEG images into next-generation formats like AVIF and WebP, offering significant size reductions with minimal visual loss.
 
 ## Key Features
 
@@ -20,8 +20,8 @@
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/yourusername/PhotoConverter.git
-   cd PhotoConverter
+   git clone https://github.com/yourusername/MassPhotoConverter.git
+   cd MassPhotoConverter
    ```
 
 2. **Install dependencies**:
