@@ -5,6 +5,7 @@ A high-performance batch conversion tool for PNG to AVIF format.
 
 import os
 import sys
+import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -924,7 +925,8 @@ class MainWindow(QMainWindow):
         # Analysis cache
         self.cached_analysis_results = None  # {format_name: [(quality, size), ...]}
         self.cached_analysis_params = None  # (file_path, formats, detail_index, original_size)
-        
+    
+        self.last_update_time = 0
         self.init_ui()
     
     def init_ui(self):
@@ -1739,6 +1741,7 @@ class MainWindow(QMainWindow):
         self.set_ui_enabled(False)
         self.progress_bar.setValue(0)
         self.progress_label.setText("Starting conversion...")
+        self.last_update_time = 0
         
         # Get selected output format
         format_name = self.format_combo.currentText()
@@ -1766,9 +1769,24 @@ class MainWindow(QMainWindow):
     
     def on_progress_updated(self, current: int, total: int, current_file: str):
         """Handle progress updates from the worker thread."""
-        percentage = int((current / total) * 100)
-        self.progress_bar.setValue(percentage)
-        self.progress_label.setText(f"{current} of {total} files - {current_file}")
+        current_time = time.time()
+        
+        # Throttle updates to ~20fps (50ms) to prevent flickering, 
+        # but always allow the final update (current == total)
+        if current == total or (current_time - self.last_update_time) >= 0.05:
+            percentage = int((current / total) * 100)
+            
+            # Only update value if changed to avoid unnecessary redraws
+            if self.progress_bar.value() != percentage:
+                self.progress_bar.setValue(percentage)
+            
+            # Truncate filename if too long to prevent layout thrashing
+            display_name = current_file
+            if len(display_name) > 40:
+                display_name = "..." + display_name[-37:]
+            
+            self.progress_label.setText(f"{current} of {total} files - {display_name}")
+            self.last_update_time = current_time
     
     def on_conversion_complete(self, results: list[ConversionResult]):
         """Handle completion of the conversion process."""
