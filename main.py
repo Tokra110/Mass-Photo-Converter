@@ -213,6 +213,10 @@ def _build_output_formats() -> dict[str, OutputFormat]:
     formats = {
         'WebP': OutputFormat('WebP', '.webp', 'WebP', default_quality=85),
         'AVIF': OutputFormat('AVIF', '.avif', 'AVIF', default_quality=80, extra_params={'speed': 6}),
+        'JPEG': OutputFormat('JPEG', '.jpg', 'JPEG', default_quality=80, extra_params={'optimize': True}),
+        'PNG': OutputFormat('PNG', '.png', 'PNG', default_quality=100, extra_params={'optimize': True}),
+        'TIFF': OutputFormat('TIFF', '.tiff', 'TIFF', default_quality=80, extra_params={'compression': 'tiff_lzw'}),
+        'BMP': OutputFormat('BMP', '.bmp', 'BMP', default_quality=100),
     }
     if HEIC_AVAILABLE:
         formats['HEIC'] = OutputFormat('HEIC', '.heic', 'HEIF', default_quality=80)
@@ -222,7 +226,7 @@ def _build_output_formats() -> dict[str, OutputFormat]:
 
 
 OUTPUT_FORMATS = _build_output_formats()
-INPUT_EXTENSIONS = {'.png', '.tiff', '.tif', '.jpg', '.jpeg'}
+INPUT_EXTENSIONS = {'.png', '.tiff', '.tif', '.jpg', '.jpeg', '.bmp', '.webp', '.avif', '.heic', '.heif'}
 
 
 @dataclass
@@ -234,6 +238,28 @@ class ConversionResult:
     converted_size: int
     success: bool
     error: Optional[str] = None
+
+
+def prepare_image_for_save(img: Image.Image, format_name: str) -> Image.Image:
+    """Prepare image for saving (handle alpha channel for non-supporting formats)."""
+    # If the format doesn't support transparency, composite over white
+    if format_name in ('JPEG', 'BMP'):
+        if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+            background.paste(img, mask=img.split()[3])
+            return background
+        elif img.mode != 'RGB':
+            return img.convert('RGB')
+        return img
+        
+    # For other formats, ensure valid mode (usually RGB or RGBA)
+    # Most support RGBA, but if it's CMYK or something else, we might want to convert
+    if img.mode not in ('RGB', 'RGBA', 'L', 'LA'):
+        return img.convert('RGBA')
+    
+    return img
 
 
 class ConversionWorker(QThread):
@@ -250,6 +276,7 @@ class ConversionWorker(QThread):
         include_subfolders: bool,
         quality: int,
         output_format: OutputFormat,
+        allowed_extensions: Optional[set] = None,
         parent=None
     ):
         super().__init__(parent)
@@ -258,6 +285,7 @@ class ConversionWorker(QThread):
         self.include_subfolders = include_subfolders
         self.quality = quality
         self.output_format = output_format
+        self.allowed_extensions = allowed_extensions or INPUT_EXTENSIONS
         self._cancelled = False
         self._lock = threading.Lock()
     
@@ -278,11 +306,11 @@ class ConversionWorker(QThread):
         if self.include_subfolders:
             for root, _, files in os.walk(self.source_dir):
                 for file in files:
-                    if Path(file).suffix.lower() in INPUT_EXTENSIONS:
+                    if Path(file).suffix.lower() in self.allowed_extensions:
                         image_files.append(Path(root) / file)
         else:
             for file in self.source_dir.iterdir():
-                if file.is_file() and file.suffix.lower() in INPUT_EXTENSIONS:
+                if file.is_file() and file.suffix.lower() in self.allowed_extensions:
                     image_files.append(file)
         
         return image_files
@@ -304,12 +332,8 @@ class ConversionWorker(QThread):
             
             # Open and convert image
             with Image.open(source_file) as img:
-                # Convert to RGB/RGBA as needed
-                if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
-                    # Keep alpha channel for transparent images
-                    img = img.convert('RGBA')
-                elif img.mode != 'RGB':
-                    img = img.convert('RGB')
+                # Prepare image (handle alpha etc)
+                img = prepare_image_for_save(img, self.output_format.name)
                 
                 # Build save parameters from format config
                 save_params = {
@@ -393,6 +417,10 @@ class SizeEstimator:
         'AVIF': {10: 0.05, 20: 0.08, 30: 0.12, 40: 0.18, 50: 0.25, 60: 0.32, 70: 0.42, 80: 0.55, 90: 0.72, 100: 0.90},
         'HEIC': {10: 0.06, 20: 0.09, 30: 0.13, 40: 0.19, 50: 0.26, 60: 0.35, 70: 0.46, 80: 0.58, 90: 0.75, 100: 0.92},
         'JPEG XL': {10: 0.04, 20: 0.07, 30: 0.11, 40: 0.16, 50: 0.22, 60: 0.30, 70: 0.40, 80: 0.52, 90: 0.70, 100: 0.88},
+        'JPEG': {10: 0.08, 20: 0.13, 30: 0.18, 40: 0.24, 50: 0.33, 60: 0.42, 70: 0.55, 80: 0.68, 90: 0.85, 100: 1.05},
+        'PNG': {10: 0.80, 20: 0.85, 30: 0.90, 40: 0.95, 50: 1.0, 60: 1.0, 70: 1.0, 80: 1.0, 90: 1.0, 100: 1.0}, # PNG is lossless
+        'TIFF': {10: 0.90, 50: 1.0, 100: 1.2},    # TIFF usually large
+        'BMP': {10: 1.0, 50: 1.0, 100: 1.0},      # BMP is uncompressed
     }
     
     @classmethod
@@ -453,6 +481,9 @@ class AnalysisWorker(QThread):
         
         # Copy image for thread safety - PIL images are not thread-safe
         img_copy = self.pil_image.copy()
+        
+        # Prepare for save (handle alpha for JPEG etc)
+        img_copy = prepare_image_for_save(img_copy, fmt.name)
         
         buffer = BytesIO()
         save_params = {
@@ -745,9 +776,15 @@ class ComparisonWidget(QWidget):
         self.zoom_level = 1.0  # 1.0 = fit to widget
         self.pan_offset_x = 0.0
         self.pan_offset_y = 0.0
+        self._opacity = 1.0
         self.setMinimumHeight(200)
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+    
+    def setOpacity(self, opacity: float):
+        """Set opacity for the widget (used for disabled state)."""
+        self._opacity = max(0.0, min(1.0, opacity))
+        self.update()
     
     def set_images(self, left: Optional[QPixmap], right: Optional[QPixmap],
                    input_label: str = "Original", output_label: str = "Converted",
@@ -930,6 +967,21 @@ class ComparisonWidget(QWidget):
         if self.zoom_level != 1.0:
             zoom_text = f"Zoom: {self.zoom_level:.1f}x (scroll=zoom, right-drag=pan, dbl-click=reset)"
             self.draw_pill_label(painter, zoom_text, 15, rect.height() - 45, smaller=True)
+            
+        # Draw disabled overlay if opacity < 1.0
+        if self._opacity < 1.0:
+            painter.setBrush(QColor(0, 0, 0, int(255 * (1.0 - self._opacity))))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRect(rect)
+            
+            # Draw "Converting..." text if disabled
+            if not self.isEnabled():
+                painter.setPen(QColor(255, 255, 255))
+                font = QFont()
+                font.setPointSize(24)
+                font.setBold(True)
+                painter.setFont(font)
+                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "Converting...")
     
     def draw_pill_label(self, painter: QPainter, text: str, x: int, y: int, smaller: bool = False):
         """Draw a label with pill-shaped background."""
@@ -1175,6 +1227,22 @@ class MainWindow(QMainWindow):
         self.subfolder_check.setChecked(True)
         self.subfolder_check.stateChanged.connect(self.on_source_changed)
         folder_layout.addWidget(self.subfolder_check)
+
+        # Filter by type
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(QLabel("Filter source:"))
+        self.filter_combo = QComboBox()
+        self.filter_combo.addItem("All Supported Images", None)
+        self.filter_combo.addItem("JPEG Images (*.jpg, *.jpeg)", {'.jpg', '.jpeg'})
+        self.filter_combo.addItem("PNG Images (*.png)", {'.png'})
+        self.filter_combo.addItem("TIFF Images (*.tiff, *.tif)", {'.tiff', '.tif'})
+        self.filter_combo.addItem("BMP Images (*.bmp)", {'.bmp'})
+        self.filter_combo.addItem("WebP Images (*.webp)", {'.webp'})
+        self.filter_combo.addItem("AVIF Images (*.avif)", {'.avif'})
+        self.filter_combo.addItem("HEIC Images (*.heic)", {'.heic'})
+        self.filter_combo.currentIndexChanged.connect(self.on_source_changed)
+        filter_layout.addWidget(self.filter_combo, 1)
+        folder_layout.addLayout(filter_layout)
         
         left_layout.addWidget(folder_group)
         
@@ -1373,6 +1441,9 @@ class MainWindow(QMainWindow):
         """Handle source folder change - update file list and preview."""
         source_path = self.source_edit.text()
         
+        # Update current allowed extensions for counter
+        self.current_allowed_extensions = self.filter_combo.currentData() or INPUT_EXTENSIONS
+        
         if not source_path or not Path(source_path).exists():
             self.image_files = []
             self.preview_combo.clear()
@@ -1384,16 +1455,17 @@ class MainWindow(QMainWindow):
         # Find image files
         folder = Path(source_path)
         include_subfolders = self.subfolder_check.isChecked()
+        allowed_extensions = self.filter_combo.currentData() or INPUT_EXTENSIONS
         
         self.image_files = []
         if include_subfolders:
             for root, _, files in os.walk(folder):
                 for file in files:
-                    if Path(file).suffix.lower() in INPUT_EXTENSIONS:
+                    if Path(file).suffix.lower() in allowed_extensions:
                         self.image_files.append(Path(root) / file)
         else:
             for file in folder.iterdir():
-                if file.is_file() and file.suffix.lower() in INPUT_EXTENSIONS:
+                if file.is_file() and file.suffix.lower() in allowed_extensions:
                     self.image_files.append(file)
         
         # Sort by name
@@ -1678,7 +1750,13 @@ class MainWindow(QMainWindow):
             'quality': quality,
             **fmt.extra_params
         }
-        self.current_pil_image.save(output_buffer, **save_params)
+
+        
+        # Prepare image (handle alpha etc) - work on a copy to not modify self.current_pil_image
+        img_to_save = self.current_pil_image.copy()
+        img_to_save = prepare_image_for_save(img_to_save, fmt.name)
+        
+        img_to_save.save(output_buffer, **save_params)
         converted_size = output_buffer.tell()
         
         output_buffer.seek(0)
@@ -1740,14 +1818,22 @@ class MainWindow(QMainWindow):
             if left_format == "Original":
                 left_info = f"{left_label}: {left_str}"
             else:
-                left_reduction = (1 - left_size / original_size) * 100
-                left_info = f"{left_label}: {left_str} ({left_reduction:.0f}% savings)"
+                if left_size > original_size:
+                    increase_pct = (left_size / original_size - 1) * 100
+                    left_info = f"{left_label}: {left_str} ({increase_pct:.0f}% bigger)"
+                else:
+                    left_reduction = (1 - left_size / original_size) * 100
+                    left_info = f"{left_label}: {left_str} ({left_reduction:.0f}% savings)"
             
             if right_format == "Original":
                 right_info = f"{right_label}: {right_str}"
             else:
-                right_reduction = (1 - right_size / original_size) * 100
-                right_info = f"{right_label}: {right_str} ({right_reduction:.0f}% savings)"
+                if right_size > original_size:
+                    increase_pct = (right_size / original_size - 1) * 100
+                    right_info = f"{right_label}: {right_str} ({increase_pct:.0f}% bigger)"
+                else:
+                    right_reduction = (1 - right_size / original_size) * 100
+                    right_info = f"{right_label}: {right_str} ({right_reduction:.0f}% savings)"
             
             self.size_info_label.setText(f"{left_info}   |   {right_info}")
             
@@ -1797,13 +1883,13 @@ class MainWindow(QMainWindow):
             if include_subfolders:
                 for root, _, files in os.walk(folder):
                     for file in files:
-                        if Path(file).suffix.lower() in INPUT_EXTENSIONS:
+                        if Path(file).suffix.lower() in getattr(self, 'current_allowed_extensions', INPUT_EXTENSIONS):
                             file_path = Path(root) / file
                             count += 1
                             total_size += file_path.stat().st_size
             else:
                 for file in folder.iterdir():
-                    if file.is_file() and file.suffix.lower() in INPUT_EXTENSIONS:
+                    if file.is_file() and file.suffix.lower() in getattr(self, 'current_allowed_extensions', INPUT_EXTENSIONS):
                         count += 1
                         total_size += file.stat().st_size
         except Exception:
@@ -1830,23 +1916,27 @@ class MainWindow(QMainWindow):
             self.estimate_label.setText("No image files found in selected folder")
             return
         
-        # Use actual ratio from preview if available, otherwise use estimate
         if hasattr(self, 'actual_compression_ratio') and self.actual_compression_ratio > 0:
             ratio = self.actual_compression_ratio
             estimated_size = int(total_size * ratio)
-            reduction_pct = (1 - ratio) * 100
             estimate_type = "based on preview"
         else:
             ratio = SizeEstimator.estimate_ratio(quality, format_name)
             estimated_size = int(total_size * ratio)
-            reduction_pct = (1 - ratio) * 100
             estimate_type = "estimated"
         
         original_str = SizeEstimator.format_size(total_size)
         estimated_str = SizeEstimator.format_size(estimated_size)
         
+        if estimated_size > total_size:
+            increase_pct = (estimated_size / total_size - 1) * 100
+            diff_str = f"~{increase_pct:.0f}% bigger"
+        else:
+            reduction_pct = (1 - estimated_size / total_size) * 100
+            diff_str = f"~{reduction_pct:.0f}% savings"
+
         self.estimate_label.setText(
-            f"📁 All {file_count} files ({estimate_type}): {original_str} → ~{estimated_str} (~{reduction_pct:.0f}% savings)"
+            f"📁 All {file_count} files ({estimate_type}): {original_str} → ~{estimated_str} ({diff_str})"
         )
     
     def set_ui_enabled(self, enabled: bool):
@@ -1856,11 +1946,23 @@ class MainWindow(QMainWindow):
         self.source_btn.setEnabled(enabled)
         self.dest_btn.setEnabled(enabled)
         self.subfolder_check.setEnabled(enabled)
+        self.filter_combo.setEnabled(enabled)  # Added filter combo
         self.format_combo.setEnabled(enabled)
         self.left_format_combo.setEnabled(enabled)
         self.right_format_combo.setEnabled(enabled)
         self.quality_slider.setEnabled(enabled)
         self.preview_combo.setEnabled(enabled)
+        self.load_preview_btn.setEnabled(enabled)  # Added load button
+        
+        # Analyze button state depends on enabled AND if we have an image
+        if enabled:
+            self.analyze_btn.setEnabled(self.current_pil_image is not None)
+        else:
+            self.analyze_btn.setEnabled(False)
+            
+        self.comparison_widget.setEnabled(enabled) # Disable preview interaction
+        self.comparison_widget.setOpacity(1.0 if enabled else 0.5) # Explicitly dim if platform style doesn't
+        
         self.start_btn.setEnabled(enabled)
         self.cancel_btn.setEnabled(not enabled)
     
@@ -1932,7 +2034,8 @@ class MainWindow(QMainWindow):
             dest_dir=dest_path,
             include_subfolders=self.subfolder_check.isChecked(),
             quality=self.quality_slider.value(),
-            output_format=output_format
+            output_format=output_format,
+            allowed_extensions=self.filter_combo.currentData()
         )
         
         self.conversion_worker.progress_updated.connect(self.on_progress_updated)
@@ -1979,11 +2082,17 @@ class MainWindow(QMainWindow):
         total_converted = sum(r.converted_size for r in results if r.success)
         
         if total_original > 0:
-            reduction = (1 - total_converted / total_original) * 100
+            if total_converted > total_original:
+                increase = (total_converted / total_original - 1) * 100
+                diff_str = f"{increase:.1f}% larger"
+            else:
+                reduction = (1 - total_converted / total_original) * 100
+                diff_str = f"{reduction:.1f}% reduction"
+
             size_info = (
                 f"\n\nTotal: {SizeEstimator.format_size(total_original)} → "
                 f"{SizeEstimator.format_size(total_converted)} "
-                f"({reduction:.1f}% reduction)"
+                f"({diff_str})"
             )
         else:
             size_info = ""
